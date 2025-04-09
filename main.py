@@ -1,3 +1,7 @@
+from datetime import datetime
+
+from torch.utils.tensorboard import SummaryWriter
+
 from pipnet.pipnet import PIPNet, get_network
 from util.log import Log
 import torch.nn as nn
@@ -56,6 +60,7 @@ def run_pipnet(args=None):
             device = torch.device('cuda:'+str(device_ids[0]))
     else:
         device = torch.device('cpu')
+        device_ids.append(0)
      
     # Log which device was actually used
     print("Device used: ", device, "with id", device_ids, flush=True)
@@ -81,9 +86,12 @@ def run_pipnet(args=None):
                     classification_layer = classification_layer
                     )
     net = net.to(device=device)
-    net = nn.DataParallel(net, device_ids = device_ids)    
+    net = nn.DataParallel(net, device_ids = device_ids)
     
-    optimizer_net, optimizer_classifier, params_to_freeze, params_to_train, params_backbone = get_optimizer_nn(net, args)   
+    optimizer_net, optimizer_classifier, params_to_freeze, params_to_train, params_backbone = get_optimizer_nn(net, args)
+    global_epoch = 0
+    dirname = datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
+    tb_writer = SummaryWriter(f"tensorboard/{dirname}")
 
     # Initialize or load model
     with torch.no_grad():
@@ -157,13 +165,16 @@ def run_pipnet(args=None):
         print("\nPretrain Epoch", epoch, "with batch size", trainloader_pretraining.batch_size, flush=True)
         
         # Pretrain prototypes
-        train_info = train_pipnet(net, trainloader_pretraining, optimizer_net, optimizer_classifier, scheduler_net, None, criterion, epoch, args.epochs_pretrain, device, pretrain=True, finetune=False)
+        train_info = train_pipnet(net, trainloader_pretraining, optimizer_net, optimizer_classifier, scheduler_net, None, criterion, epoch, args.epochs_pretrain, global_epoch, device, pretrain=True, finetune=False, tb_writer=tb_writer)
         lrs_pretrain_net+=train_info['lrs_net']
+        eval_info = eval_pipnet(net, testloader, global_epoch, device, log, tensorboard=tb_writer)
+
         plt.clf()
         plt.plot(lrs_pretrain_net)
         plt.savefig(os.path.join(args.log_dir,'lr_pretrain_net.png'))
         log.log_values('log_epoch_overview', epoch, "n.a.", "n.a.", "n.a.", "n.a.", "n.a.", "n.a.", "n.a.", train_info['loss'])
-    
+        global_epoch += 1
+
     if args.state_dict_dir_net == '':
         net.eval()
         torch.save({'model_state_dict': net.state_dict(), 'optimizer_net_state_dict': optimizer_net.state_dict()}, os.path.join(os.path.join(args.log_dir, 'checkpoints'), 'net_pretrained'))
@@ -239,11 +250,11 @@ def run_pipnet(args=None):
                     print("Classifier bias: ", net.module._classification.bias, flush=True)
                 torch.set_printoptions(profile="default")
 
-        train_info = train_pipnet(net, trainloader, optimizer_net, optimizer_classifier, scheduler_net, scheduler_classifier, criterion, epoch, args.epochs, device, pretrain=False, finetune=finetune)
+        train_info = train_pipnet(net, trainloader, optimizer_net, optimizer_classifier, scheduler_net, scheduler_classifier, criterion, epoch, args.epochs, global_epoch, device, pretrain=False, finetune=finetune)
         lrs_net+=train_info['lrs_net']
         lrs_classifier+=train_info['lrs_class']
         # Evaluate model
-        eval_info = eval_pipnet(net, testloader, epoch, device, log)
+        eval_info = eval_pipnet(net, testloader, global_epoch, device, log)
         log.log_values('log_epoch_overview', epoch, eval_info['top1_accuracy'], eval_info['top5_accuracy'], eval_info['almost_sim_nonzeros'], eval_info['local_size_all_classes'], eval_info['almost_nonzeros'], eval_info['num non-zero prototypes'], train_info['train_accuracy'], train_info['loss'])
             
         with torch.no_grad():
@@ -261,6 +272,7 @@ def run_pipnet(args=None):
             plt.clf()
             plt.plot(lrs_classifier)
             plt.savefig(os.path.join(args.log_dir,'lr_class.png'))
+        global_epoch += 1
                 
     net.eval()
     torch.save({'model_state_dict': net.state_dict(), 'optimizer_net_state_dict': optimizer_net.state_dict(), 'optimizer_classifier_state_dict': optimizer_classifier.state_dict()}, os.path.join(os.path.join(args.log_dir, 'checkpoints'), 'net_trained_last'))
@@ -361,11 +373,11 @@ if __name__ == '__main__':
     tqdm_dir = os.path.join(args.log_dir,'tqdm.txt')
     if not os.path.isdir(args.log_dir):
         os.mkdir(args.log_dir)
-    
-    sys.stdout.close()
-    sys.stderr.close()
-    sys.stdout = open(print_dir, 'w')
-    sys.stderr = open(tqdm_dir, 'w')
+    print(torch.cuda.is_available())
+    # sys.stdout.close()
+    # sys.stderr.close()
+    # sys.stdout = open(print_dir, 'w')
+    # sys.stderr = open(tqdm_dir, 'w')
     run_pipnet(args)
     
     sys.stdout.close()

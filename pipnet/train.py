@@ -3,9 +3,10 @@ import torch
 import torch.nn.functional as F
 import torch.optim
 import torch.utils.data
-import math
+from torch.utils.tensorboard import SummaryWriter
 
-def train_pipnet(net, train_loader, optimizer_net, optimizer_classifier, scheduler_net, scheduler_classifier, criterion, epoch, nr_epochs, device, pretrain=False, finetune=False, progress_prefix: str = 'Train Epoch'):
+
+def train_pipnet(net, train_loader, optimizer_net, optimizer_classifier, scheduler_net, scheduler_classifier, criterion, epoch, nr_epochs, global_epoch, device, pretrain=False, finetune=False, progress_prefix: str = 'Train Epoch', tb_writer: SummaryWriter = None):
 
     # Make sure the model is in train mode
     net.train()
@@ -65,7 +66,7 @@ def train_pipnet(net, train_loader, optimizer_net, optimizer_classifier, schedul
        
         # Perform a forward pass through the network
         proto_features, pooled, out = net(torch.cat([xs1, xs2]))
-        loss, acc = calculate_loss(proto_features, pooled, out, ys, align_pf_weight, t_weight, unif_weight, cl_weight, net.module._classification.normalization_multiplier, pretrain, finetune, criterion, train_iter, print=True, EPS=1e-8)
+        loss, acc = calculate_loss(proto_features, pooled, out, ys, align_pf_weight, t_weight, unif_weight, cl_weight, net.module._classification.normalization_multiplier, pretrain, finetune, criterion, train_iter, global_epoch, print=True, EPS=1e-8, tb_writer=tb_writer)
         
         # Compute the gradient
         loss.backward()
@@ -99,7 +100,7 @@ def train_pipnet(net, train_loader, optimizer_net, optimizer_classifier, schedul
     
     return train_info
 
-def calculate_loss(proto_features, pooled, out, ys1, align_pf_weight, t_weight, unif_weight, cl_weight, net_normalization_multiplier, pretrain, finetune, criterion, train_iter, print=True, EPS=1e-10):
+def calculate_loss(proto_features, pooled, out, ys1, align_pf_weight, t_weight, unif_weight, cl_weight, net_normalization_multiplier, pretrain, finetune, criterion, train_iter, global_epoch, print=True, EPS=1e-10, tb_writer=None):
     ys = torch.cat([ys1,ys1])
     pooled1, pooled2 = pooled.chunk(2)
     pf1, pf2 = proto_features.chunk(2)
@@ -132,7 +133,16 @@ def calculate_loss(proto_features, pooled, out, ys1, align_pf_weight, t_weight, 
         ys_pred_max = torch.argmax(out, dim=1)
         correct = torch.sum(torch.eq(ys_pred_max, ys))
         acc = correct.item() / float(len(ys))
-    if print: 
+    if print:
+        if tb_writer is not None:
+            scalars = {'loss': loss.item(), 'align_loss': a_loss_pf.item(), 'tanh_loss': tanh_loss.item(),
+                   'acc': acc, 't_weight': t_weight, 'align_pf_weight': align_pf_weight, 'cl_weight': cl_weight,
+                   'num_scores>0.1': torch.count_nonzero(torch.relu(pooled-0.1),dim=1).float().mean().item()}
+            if not pretrain:
+                scalars['class_loss'] = class_loss.item()
+            for key, value in scalars.items():
+                tb_writer.add_scalar(key, value, global_epoch)
+
         with torch.no_grad():
             if pretrain:
                 train_iter.set_postfix_str(

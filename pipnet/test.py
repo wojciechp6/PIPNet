@@ -1,3 +1,11 @@
+import io
+import itertools
+import math
+from typing import List
+
+from matplotlib import pyplot as plt
+from scipy.interpolate import make_interp_spline
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import numpy as np
 import torch
@@ -13,7 +21,8 @@ def eval_pipnet(net,
         test_loader: DataLoader,
         epoch,
         device,
-        log: Log = None,  
+        log: Log = None,
+        tensorboard: SummaryWriter|None = None,
         progress_prefix: str = 'Eval Epoch'
         ) -> dict:
     
@@ -41,6 +50,7 @@ def eval_pipnet(net,
                         mininterval=5.,
                         ncols=0)
     (xs, ys) = next(iter(test_loader))
+    inputs, results = [], []
     # Iterate through the test set
     for i, (xs, ys) in test_iter:
         xs, ys = xs.to(device), ys.to(device)
@@ -81,14 +91,20 @@ def eval_pipnet(net,
             y_preds += ys_pred_scores.detach().tolist()
             y_trues += ys.detach().tolist()
             y_preds_classes += ys_pred.detach().tolist()
+            inputs.append(xs)
+            results.append((pooled, out, ys_pred))
+
         
-        del out
-        del pooled
-        del ys_pred
+        # del out
+        # del pooled
+        # del ys_pred
         
-    print("PIP-Net abstained from a decision for", abstained.item(), "images", flush=True)            
+    print("PIP-Net abstained from a decision for", abstained.item(), "images", flush=True)
+    info['abstained'] = abstained.item()
     info['num non-zero prototypes'] = torch.gt(net.module._classification.weight,1e-3).any(dim=0).sum().item()
-    print("sparsity ratio: ", (torch.numel(net.module._classification.weight)-torch.count_nonzero(torch.nn.functional.relu(net.module._classification.weight-1e-3)).item()) / torch.numel(net.module._classification.weight), flush=True)
+    sparsity_ratio = (torch.numel(net.module._classification.weight)-torch.count_nonzero(torch.nn.functional.relu(net.module._classification.weight-1e-3)).item()) / torch.numel(net.module._classification.weight)
+    print("sparsity ratio: ", sparsity_ratio, flush=True)
+    info['sparsity ratio'] = sparsity_ratio
     info['confusion_matrix'] = cm
     info['test_accuracy'] = acc_from_cm(cm)
     info['top1_accuracy'] = global_top1acc/len(test_loader.dataset)
@@ -96,6 +112,9 @@ def eval_pipnet(net,
     info['almost_sim_nonzeros'] = global_sim_anz/len(test_loader.dataset)
     info['local_size_all_classes'] = local_size_total / len(test_loader.dataset)
     info['almost_nonzeros'] = global_anz/len(test_loader.dataset)
+
+    if tensorboard is not None:
+        log_to_tensorboard(info, net.module, inputs, results, classes=test_loader.dataset.class_to_idx.values(), global_epoch=epoch, tb_writer=tensorboard)
 
     if net.module._num_classes == 2:
         tp = cm[0][0]
@@ -127,6 +146,87 @@ def eval_pipnet(net,
         info['top5_accuracy'] = global_top5acc/len(test_loader.dataset) 
 
     return info
+
+def log_to_tensorboard(info: dict, model_module, inp, preds, classes: List[str], global_epoch: int, tb_writer: SummaryWriter):
+    for key, value in info.items():
+        match key:
+            case 'confusion_matrix':
+                # figure = plot_confusion_matrix(value, class_names=classes)
+                # image = plot_to_image(figure)
+                # tb_writer.add_image(key, image, global_epoch)
+                pass
+            case _:
+                tb_writer.add_scalar(key, value, global_epoch)
+
+    if hasattr(model_module, '_classification'):
+        weights = model_module._classification.weight.flatten()
+        tb_writer.add_figure('classification_weights', plot_tensor(weights, samples=66), global_epoch)
+
+    inp = inp[0]
+    tb_writer.add_graph(model_module, inp)
+    pooled, out, ys_pred = [torch.cat([pred[i] for pred in preds], dim=0) for i in range(3)]
+    tb_writer.add_figure('pooled', plot_batch(pooled), global_epoch)
+    tb_writer.add_figure('out', plot_batch(out), global_epoch)
+    tb_writer.add_histogram('ys_pred', ys_pred, global_epoch)
+
+def plot_batch(tensor: torch.Tensor, samples = 8, title: str = None):
+    batch_size = tensor.shape[0]
+    if batch_size > samples:
+        tensor = tensor[::batch_size//samples]
+    size = len(tensor)
+    plt.figure(figsize=(10, 10))
+    for i in range(len(tensor)):
+        plt.subplot(math.ceil(size / 2), 2, i+1)
+        plot_tensor(tensor[i])
+    return plt.gcf()
+
+
+def plot_tensor(tensor: torch.Tensor, title: str = None, samples: int = 50):
+    array = tensor.cpu().numpy()
+    array = smooth_array(array, samples)
+    plt.plot(array)
+    if title is not None:
+        plt.title(title)
+    return plt.gcf()
+
+def smooth_array(array: np.ndarray, samples: int = 50):
+    window_size = len(array) // samples
+    kernel = np.ones(window_size) / window_size
+    smoothed_tensor = np.convolve(array, kernel, mode='valid')
+    return smoothed_tensor
+
+def plot_confusion_matrix(cm, class_names):
+    figure = plt.figure(figsize=(8, 8))
+    plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Accent)
+    plt.title("Confusion matrix")
+    plt.colorbar()
+    tick_marks = np.arange(len(class_names))
+    plt.xticks(tick_marks, class_names, rotation=45)
+    plt.yticks(tick_marks, class_names)
+
+    cm = np.around(cm.astype('float') / cm.sum(axis=1)[:, np.newaxis], decimals=2)
+    threshold = cm.max() / 2.
+
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        color = "white" if cm[i, j] > threshold else "black"
+        plt.text(j, i, cm[i, j], horizontalalignment="center", color=color)
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+
+    return figure
+
+def plot_to_image(figure):
+    figure.canvas.draw()
+    data = np.frombuffer(figure.canvas.tostring_argb(), dtype=np.uint8)
+    data = data.reshape(figure.canvas.get_width_height()[::-1] + (4,))  # (H, W, 4)
+
+    data = data[:, :, [1, 2, 3]]  # Drop the alpha channel (0th index)
+    tensor = torch.tensor(data)
+    tensor = tensor.float() / 255.0
+    plt.close(figure)
+    return tensor.permute(2, 0, 1)
 
 def acc_from_cm(cm: np.ndarray) -> float:
     """
