@@ -4,7 +4,9 @@ import math
 from typing import List
 
 from matplotlib import pyplot as plt
+from matplotlib.gridspec import GridSpec
 from scipy.interpolate import make_interp_spline
+from sympy import false
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import numpy as np
@@ -56,7 +58,7 @@ def eval_pipnet(net,
         xs, ys = xs.to(device), ys.to(device)
         
         with torch.no_grad():
-            net.module._classification.weight.copy_(torch.clamp(net.module._classification.weight.data - 1e-3, min=0.)) 
+            # net.module._classification.weight.copy_(torch.clamp(net.module._classification.weight.data - 1e-3, min=0.))
             # Use the model to classify this batch of input data
             _, pooled, out = net(xs, inference=True)
             max_out_score, ys_pred = torch.max(out, dim=1)
@@ -115,6 +117,7 @@ def eval_pipnet(net,
 
     if tensorboard is not None:
         log_to_tensorboard(info, net.module, inputs, results, classes=test_loader.dataset.class_to_idx.values(), global_epoch=epoch, tb_writer=tensorboard)
+        tensorboard.flush()
 
     if net.module._num_classes == 2:
         tp = cm[0][0]
@@ -159,8 +162,12 @@ def log_to_tensorboard(info: dict, model_module, inp, preds, classes: List[str],
                 tb_writer.add_scalar(key, value, global_epoch)
 
     if hasattr(model_module, '_classification'):
-        weights = model_module._classification.weight.flatten()
-        tb_writer.add_figure('classification_weights', plot_tensor(weights, samples=66), global_epoch)
+        weights = model_module._classification.weight.flatten().cpu()
+        fig = plot_tensor(weights, samples=66)
+        tb_writer.add_figure('classification_weights', fig, global_epoch)
+
+        fig = plot_tensor(torch.relu(weights), samples=66)
+        tb_writer.add_figure('classification_non_neg', fig, global_epoch)
 
     inp = inp[0]
     tb_writer.add_graph(model_module, inp)
@@ -169,21 +176,63 @@ def log_to_tensorboard(info: dict, model_module, inp, preds, classes: List[str],
     tb_writer.add_figure('out', plot_batch(out), global_epoch)
     tb_writer.add_histogram('ys_pred', ys_pred, global_epoch)
 
-def plot_batch(tensor: torch.Tensor, samples = 8, title: str = None):
+# def plot_batch(tensor: torch.Tensor, samples = 4, title: str = None):
+#     batch_size = tensor.shape[0]
+#     if batch_size > samples:
+#         tensor = tensor[::batch_size//samples]
+#     size = len(tensor)
+#     plt.figure(figsize=(10, 12))
+#     for i in range(len(tensor)):
+#         plt.subplot(math.ceil(size / 2) + 1, 2, i+1)
+#         plot_tensor(tensor[i], subplot=True)
+#
+#     plt.subplot(math.ceil(size / 2) + 1, 2, size+1)
+#     plot_tensor(torch.max(tensor,dim=0).values, subplot=True)
+#     plt.subplot(math.ceil(size / 2) + 1, 2, size+2)
+#     plot_tensor(torch.min(tensor,dim=0).values, subplot=True)
+#     plt.show()
+#     return plt.gcf()
+
+
+def plot_batch(tensor: torch.Tensor, samples: int = 3, title: str = None):
     batch_size = tensor.shape[0]
+
+    # Wybieramy równomiernie 'samples' próbek z batchu
     if batch_size > samples:
-        tensor = tensor[::batch_size//samples]
-    size = len(tensor)
-    plt.figure(figsize=(10, 10))
-    for i in range(len(tensor)):
-        plt.subplot(math.ceil(size / 2), 2, i+1)
-        plot_tensor(tensor[i])
-    return plt.gcf()
+        indices = torch.linspace(0, batch_size - 1, steps=samples).long()
+        sample_tensor = tensor[indices]
+    else:
+        sample_tensor = tensor
+
+    stats = [
+        ("Max over batch", torch.max(tensor, dim=0).values),
+        ("Min over batch", torch.min(tensor, dim=0).values),
+        ("Mean over batch", torch.mean(tensor, dim=0))
+    ]
+
+    fig = plt.figure(figsize=(12, 10))
+    if title:
+        fig.suptitle(title, fontsize=16)
+
+    ax = plt.subplot(2, 2, 1)
+    for s in sample_tensor:
+        plot_tensor(s, subplot=True)
+    ax.set_title("Samples")
+
+    for i, (stat_title, stat_tensor) in enumerate(stats, start=2):
+        ax = plt.subplot(2, 2, i)
+        plot_tensor(stat_tensor, subplot=True)
+        ax.set_title(stat_title)
+
+    plt.tight_layout()
+    return fig
 
 
-def plot_tensor(tensor: torch.Tensor, title: str = None, samples: int = 50):
+def plot_tensor(tensor: torch.Tensor, title: str = None, samples: int = 50, subplot: bool = False):
     array = tensor.cpu().numpy()
     array = smooth_array(array, samples)
+    if not subplot:
+        plt.figure()
     plt.plot(array)
     if title is not None:
         plt.title(title)

@@ -89,7 +89,7 @@ def run_pipnet(args=None):
     net = nn.DataParallel(net, device_ids = device_ids)
     
     optimizer_net, optimizer_classifier, params_to_freeze, params_to_train, params_backbone = get_optimizer_nn(net, args)
-    global_epoch = 0
+    global_epoch = 1
     dirname = datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
     tb_writer = SummaryWriter(f"tensorboard/{dirname}")
 
@@ -250,11 +250,11 @@ def run_pipnet(args=None):
                     print("Classifier bias: ", net.module._classification.bias, flush=True)
                 torch.set_printoptions(profile="default")
 
-        train_info = train_pipnet(net, trainloader, optimizer_net, optimizer_classifier, scheduler_net, scheduler_classifier, criterion, epoch, args.epochs, global_epoch, device, pretrain=False, finetune=finetune)
+        train_info = train_pipnet(net, trainloader, optimizer_net, optimizer_classifier, scheduler_net, scheduler_classifier, criterion, epoch, args.epochs, global_epoch, device, pretrain=False, finetune=finetune, tb_writer=tb_writer)
         lrs_net+=train_info['lrs_net']
         lrs_classifier+=train_info['lrs_class']
         # Evaluate model
-        eval_info = eval_pipnet(net, testloader, global_epoch, device, log)
+        eval_info = eval_pipnet(net, testloader, global_epoch, device, log, tensorboard=tb_writer)
         log.log_values('log_epoch_overview', epoch, eval_info['top1_accuracy'], eval_info['top5_accuracy'], eval_info['almost_sim_nonzeros'], eval_info['local_size_all_classes'], eval_info['almost_nonzeros'], eval_info['num non-zero prototypes'], train_info['train_accuracy'], train_info['loss'])
             
         with torch.no_grad():
