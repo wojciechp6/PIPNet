@@ -7,13 +7,6 @@ from features.convnext_features import convnext_tiny_26_features, convnext_tiny_
 import torch
 from torch import Tensor
 
-from pipnet.cast_layer import CastLayer
-from pipnet.clamp_layer import ClampLayer
-from pipnet.gumbel_layer import GumbelSoftmaxLayer
-from pipnet.one_hot_encoding_layer import SoftOneHotEncodingLayer
-from pipnet.sum_layer import SumLayer
-
-
 class PIPNet(nn.Module):
     def __init__(self,
                  num_classes: int,
@@ -94,7 +87,7 @@ def get_network(num_classes: int, args: argparse.Namespace):
         num_prototypes = first_add_on_layer_in_channels
         print("Number of prototypes: ", num_prototypes, flush=True)
         add_on_layers = nn.Sequential(
-            GumbelSoftmaxLayer(dim=1, tau=args.temperature), #softmax over every prototype for each patch, such that for every location in image, sum over prototypes is 1
+            nn.Softmax(dim=1), #softmax over every prototype for each patch, such that for every location in image, sum over prototypes is 1
     )
     else:
         num_prototypes = args.num_features
@@ -107,19 +100,11 @@ def get_network(num_classes: int, args: argparse.Namespace):
                 nn.AdaptiveMaxPool2d(output_size=(1,1)), #outputs (bs, ps,1,1)
                 nn.Flatten() #outputs (bs, ps)
                 )
-    max_class_occurrences = 3
-    pool_layer = nn.Sequential(
-        SumLayer(dim=[2,3]), #sum over all patches, outputs (bs, ps)
-        ClampLayer(0, max_class_occurrences), #clamp to 3
-        # CastLayer(torch.int, round_before_cast=True), #cast to int
-        SoftOneHotEncodingLayer(max_class_occurrences, temperature=args.temperature), #one-hot encoding (bs, ps, 4)
-        nn.Flatten()
-    )
     
     if args.bias:
-        classification_layer = NonNegLinear(num_prototypes * max_class_occurrences, num_classes, bias=True)
+        classification_layer = NonNegLinear(num_prototypes, num_classes, bias=True)
     else:
-        classification_layer = NonNegLinear(num_prototypes * max_class_occurrences, num_classes, bias=False)
+        classification_layer = NonNegLinear(num_prototypes, num_classes, bias=False)
         
     return features, add_on_layers, pool_layer, classification_layer, num_prototypes
 
