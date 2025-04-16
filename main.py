@@ -167,7 +167,7 @@ def run_pipnet(args=None):
         # Pretrain prototypes
         train_info = train_pipnet(net, trainloader_pretraining, optimizer_net, optimizer_classifier, scheduler_net, None, criterion, epoch, args.epochs_pretrain, global_epoch, device, pretrain=True, finetune=False, tb_writer=tb_writer)
         lrs_pretrain_net+=train_info['lrs_net']
-        eval_info = eval_pipnet(net, testloader, global_epoch, device, log, tensorboard=tb_writer)
+        # eval_info = eval_pipnet(net, testloader, global_epoch, device, log, tensorboard=tb_writer)
 
         plt.clf()
         plt.plot(lrs_pretrain_net)
@@ -373,7 +373,7 @@ if __name__ == '__main__':
     tqdm_dir = os.path.join(args.log_dir,'tqdm.txt')
     if not os.path.isdir(args.log_dir):
         os.mkdir(args.log_dir)
-    print(torch.cuda.is_available())
+
     # sys.stdout.close()
     # sys.stderr.close()
     # sys.stdout = open(print_dir, 'w')
