@@ -116,11 +116,13 @@ def visualize_topk(net, projectloader, num_classes, device, foldername, args: ar
                             max_per_prototype_h, max_idx_per_prototype_h = torch.max(max_per_prototype, dim=1)
                             max_per_prototype_w, max_idx_per_prototype_w = torch.max(max_per_prototype_h, dim=1) #shape (num_prototypes)
 
+                            occurrences_per_prototype = 3
+                            _p = int(p / occurrences_per_prototype)
                             c_weight = torch.max(classification_weights[:,p]) #ignore prototypes that are not relevant to any class
                             if (c_weight > 1e-10) or ('pretrain' in foldername):
                                 
-                                h_idx = max_idx_per_prototype_h[p, max_idx_per_prototype_w[p]]
-                                w_idx = max_idx_per_prototype_w[p]
+                                h_idx = max_idx_per_prototype_h[_p, max_idx_per_prototype_w[_p]]
+                                w_idx = max_idx_per_prototype_w[_p]
                                 
                                 img_to_open = imgs[i]
                                 if isinstance(img_to_open, tuple) or isinstance(img_to_open, list): #dataset contains tuples of (img,label)
@@ -131,8 +133,8 @@ def visualize_topk(net, projectloader, num_classes, device, foldername, args: ar
                                 h_coor_min, h_coor_max, w_coor_min, w_coor_max = get_img_coordinates(args.image_size, softmaxes.shape, patchsize, skip, h_idx, w_idx)
                                 img_tensor_patch = img_tensor[0, :, h_coor_min:h_coor_max, w_coor_min:w_coor_max]
                                         
-                                saved[p]+=1
-                                tensors_per_prototype[p].append(img_tensor_patch)
+                                saved[_p]+=1
+                                tensors_per_prototype[_p].append(img_tensor_patch)
 
     print("Abstained: ", abstained, flush=True)
     all_tensors = []
