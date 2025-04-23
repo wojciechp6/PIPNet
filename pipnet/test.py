@@ -1,7 +1,5 @@
-import itertools
 from typing import List
 
-from matplotlib import pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import numpy as np
@@ -9,9 +7,11 @@ import torch
 import torch.optim
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
+
+from util.plotting import plot_tensor, plot_batch, plot_confusion_matrix
 from util.log import Log
 from util.func import topk_accuracy
-from sklearn.metrics import accuracy_score, roc_auc_score, balanced_accuracy_score, f1_score
+from sklearn.metrics import roc_auc_score, balanced_accuracy_score, f1_score
 
 @torch.no_grad()
 def eval_pipnet(net,
@@ -170,87 +170,6 @@ def log_to_tensorboard(info: dict, model_module, inp, preds, classes: List[str],
     tb_writer.add_figure('pooled', plot_batch(pooled), global_epoch)
     tb_writer.add_figure('out', plot_batch(out), global_epoch)
     tb_writer.add_histogram('ys_pred', ys_pred, global_epoch)
-
-def plot_batch(tensor: torch.Tensor, samples = 8, title: str = None):
-    batch_size = tensor.shape[0]
-    if batch_size > samples:
-        indices = torch.linspace(0, batch_size - 1, steps=samples).long()
-        sample_tensor = tensor[indices]
-    else:
-        sample_tensor = tensor
-
-    stats = [
-        ("Max over batch", torch.max(tensor, dim=0).values),
-        ("Min over batch", torch.min(tensor, dim=0).values),
-        ("Mean over batch", torch.mean(tensor, dim=0))
-    ]
-
-    fig = plt.figure(figsize=(12, 10))
-    if title:
-        fig.suptitle(title, fontsize=16)
-
-    ax = plt.subplot(2, 2, 1)
-    for s in sample_tensor:
-        plot_tensor(s, subplot=True)
-    ax.set_title("Samples")
-
-    for i, (stat_title, stat_tensor) in enumerate(stats, start=2):
-        ax = plt.subplot(2, 2, i)
-        plot_tensor(stat_tensor, subplot=True)
-        ax.set_title(stat_title)
-
-    plt.tight_layout()
-    return fig
-
-
-def plot_tensor(tensor: torch.Tensor, title: str = None, samples: int = 50, subplot: bool = False):
-    array = tensor.cpu().numpy()
-    array = smooth_array(array, samples)
-    if not subplot:
-        plt.figure()
-    plt.plot(array)
-    if title is not None:
-        plt.title(title)
-    return plt.gcf()
-
-def smooth_array(array: np.ndarray, samples: int = 50):
-    window_size = len(array) // samples
-    kernel = np.ones(window_size) / window_size
-    smoothed_tensor = np.convolve(array, kernel, mode='valid')
-    return smoothed_tensor
-
-def plot_confusion_matrix(cm, class_names):
-    figure = plt.figure(figsize=(8, 8))
-    plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Accent)
-    plt.title("Confusion matrix")
-    plt.colorbar()
-    tick_marks = np.arange(len(class_names))
-    plt.xticks(tick_marks, class_names, rotation=45)
-    plt.yticks(tick_marks, class_names)
-
-    cm = np.around(cm.astype('float') / cm.sum(axis=1)[:, np.newaxis], decimals=2)
-    threshold = cm.max() / 2.
-
-    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
-        color = "white" if cm[i, j] > threshold else "black"
-        plt.text(j, i, cm[i, j], horizontalalignment="center", color=color)
-
-    plt.tight_layout()
-    plt.ylabel('True label')
-    plt.xlabel('Predicted label')
-
-    return figure
-
-def plot_to_image(figure):
-    figure.canvas.draw()
-    data = np.frombuffer(figure.canvas.tostring_argb(), dtype=np.uint8)
-    data = data.reshape(figure.canvas.get_width_height()[::-1] + (4,))  # (H, W, 4)
-
-    data = data[:, :, [1, 2, 3]]  # Drop the alpha channel (0th index)
-    tensor = torch.tensor(data)
-    tensor = tensor.float() / 255.0
-    plt.close(figure)
-    return tensor.permute(2, 0, 1)
 
 def acc_from_cm(cm: np.ndarray) -> float:
     """
